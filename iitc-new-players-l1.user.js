@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.7.0
+// @version      1.7.1
 // @description  Tracks true L1 agents & training completions — faction filter, sound alerts, CSV export, auto-cleanup
 // @author       iq1981
 // @match        https://intel.ingress.com/*
@@ -410,9 +410,19 @@ function pluginMain () {
   }
 
   // ── Popup lifecycle ──────────────────────────────────────────────────────
+  function raiseFab () {
+    const fab = document.getElementById(`${ID}-fab`);
+    if (fab) fab.style.setProperty('bottom', Math.round(window.innerHeight * 0.86 + 16) + 'px', 'important');
+  }
+
+  function lowerFab () {
+    const fab = document.getElementById(`${ID}-fab`);
+    if (fab) fab.style.removeProperty('bottom');
+  }
+
   function togglePopup () {
     const existing = document.getElementById(`${ID}-popup`);
-    if (existing) { existing.remove(); return; }
+    if (existing) { existing.remove(); lowerFab(); return; }
 
     const mobile = window.innerWidth <= 700;
     const popup  = document.createElement('div');
@@ -425,7 +435,7 @@ function pluginMain () {
       <div id="${ID}-body">${renderBody()}</div>`;
     document.body.appendChild(popup);
 
-    document.getElementById(`${ID}-close`).addEventListener('click', () => popup.remove());
+    document.getElementById(`${ID}-close`).addEventListener('click', () => { popup.remove(); lowerFab(); });
     if (mobile) addSwipeClose(popup); else makeDraggable(popup, document.getElementById(`${ID}-header`));
     bindBodyEvents();
 
@@ -434,6 +444,7 @@ function pluginMain () {
       requestAnimationFrame(() => {
         popup.style.transition = 'transform 0.28s cubic-bezier(.2,.8,.3,1)';
         popup.style.transform  = 'translateY(0)';
+        raiseFab();
       });
     }
   }
@@ -446,8 +457,10 @@ function pluginMain () {
     handle.addEventListener('touchstart', e => { sy = e.touches[0].clientY; el.style.transition = 'none'; }, { passive: true });
     handle.addEventListener('touchmove',  e => { cy = e.touches[0].clientY - sy; if (cy > 0) el.style.transform = `translateY(${cy}px)`; }, { passive: true });
     handle.addEventListener('touchend',   () => {
-      if (cy > 80) { el.style.transition = 'transform .2s ease'; el.style.transform = 'translateY(100%)'; setTimeout(() => el.remove(), 200); }
-      else         { el.style.transition = 'transform .2s ease'; el.style.transform  = 'translateY(0)'; }
+      if (cy > 80) {
+        el.style.transition = 'transform .2s ease'; el.style.transform = 'translateY(100%)';
+        setTimeout(() => { el.remove(); lowerFab(); }, 200);
+      } else { el.style.transition = 'transform .2s ease'; el.style.transform  = 'translateY(0)'; }
       cy = 0;
     }, { passive: true });
   }
@@ -483,6 +496,7 @@ function pluginMain () {
         display:flex !important; align-items:center; justify-content:center;
         box-shadow:0 2px 12px rgba(0,229,255,.7) !important;
         -webkit-tap-highlight-color:transparent; touch-action:manipulation; outline:none;
+        transition:bottom 0.28s cubic-bezier(.2,.8,.3,1);
       }
       #${ID}-fab:active { transform:scale(.92); background:#00b8d4 !important; }
 
@@ -626,7 +640,7 @@ function pluginMain () {
 
     window.addHook('portalDetailLoaded', onPortalDetailLoaded);
     startCleanupTimer();
-    console.log('[IITC-L1Players] v1.7.0 geladen.');
+    console.log('[IITC-L1Players] v1.7.1 geladen.');
   };
 
   // ── Bootstrap ────────────────────────────────────────────────────────────
