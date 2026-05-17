@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.6.0
-// @description  Tracks L1 agents & training completions — faction filter, sound alerts, CSV export, auto-cleanup
+// @version      1.7.0
+// @description  Tracks true L1 agents & training completions — faction filter, sound alerts, CSV export, auto-cleanup
 // @author       iq1981
 // @match        https://intel.ingress.com/*
 // @grant        none
@@ -32,16 +32,17 @@ function pluginMain () {
   };
 
   // ── State ────────────────────────────────────────────────────────────────
-  self.players       = {};
-  self.graduated     = {};
-  self.markers       = {};
-  self.gradMarkers   = {};
-  self.radiusKm      = DEFAULT_RADIUS;
-  self.activeTab     = 'l1';
-  self.factionFilter = 'all';
-  self.soundEnabled  = true;
-  self.maxAgeHours   = 24;   // 0 = off
-  self._cleanupTimer = null;
+  self.players        = {};
+  self.graduated      = {};
+  self.markers        = {};
+  self.gradMarkers    = {};
+  self.knownHighLevel = new Set(); // agents confirmed L2+ → never treat as L1
+  self.radiusKm       = DEFAULT_RADIUS;
+  self.activeTab      = 'l1';
+  self.factionFilter  = 'all';
+  self.soundEnabled   = true;
+  self.maxAgeHours    = 24;   // 0 = off
+  self._cleanupTimer  = null;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   function haversineKm (lat1, lng1, lat2, lng2) {
@@ -192,12 +193,23 @@ function pluginMain () {
     const fc         = F[faction] || F.N;
     const now        = Date.now();
 
+    // Pass 1 — identify every agent with L2+ resonators on this portal.
+    // They are confirmed higher-level players and must never be counted as L1.
+    resonators.forEach(reso => {
+      if (!reso || !reso.owner) return;
+      if (Number(reso.level) >= 2 && !self.players[reso.owner] && !self.graduated[reso.owner]) {
+        self.knownHighLevel.add(reso.owner);
+      }
+    });
+
+    // Pass 2 — process each resonator with faction-accurate logic.
     resonators.forEach(reso => {
       if (!reso || !reso.owner) return;
       const level = Number(reso.level);
       const agent = reso.owner;
 
-      if (level === 1 && !self.graduated[agent]) {
+      if (level === 1 && !self.graduated[agent] && !self.knownHighLevel.has(agent)) {
+        // Confirmed L1 agent — only agents who have NEVER been seen placing L2+
         const isNew = !self.players[agent];
         if (isNew) {
           self.players[agent] = { portals: [], firstSeen: now, lat: ll.lat, lng: ll.lng, faction };
@@ -210,6 +222,7 @@ function pluginMain () {
         putMarker(agent, ll.lat, ll.lng, fc.l1, 'L1 ' + agent, self.markers);
 
       } else if (level >= 2 && self.players[agent] && !self.graduated[agent]) {
+        // Was tracked as L1, now confirmed level-up → graduate
         self.graduated[agent] = { ...self.players[agent], graduatedAt: now, level };
         delete self.players[agent];
         removeMarker(agent, self.markers);
@@ -366,7 +379,7 @@ function pluginMain () {
     if (exp) exp.addEventListener('click', exportCSV);
 
     const c = el('clear');
-    if (c) c.addEventListener('click', () => { self.players = {}; self.graduated = {}; clearAllMarkers(); rerender(); });
+    if (c) c.addEventListener('click', () => { self.players = {}; self.graduated = {}; self.knownHighLevel.clear(); clearAllMarkers(); rerender(); });
 
     const rf = el('refresh');
     if (rf) rf.addEventListener('click', rerender);
@@ -613,7 +626,7 @@ function pluginMain () {
 
     window.addHook('portalDetailLoaded', onPortalDetailLoaded);
     startCleanupTimer();
-    console.log('[IITC-L1Players] v1.6.0 geladen.');
+    console.log('[IITC-L1Players] v1.7.0 geladen.');
   };
 
   // ── Bootstrap ────────────────────────────────────────────────────────────
