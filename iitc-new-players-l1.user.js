@@ -1,12 +1,11 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.0.0
+// @version      1.1.0
 // @description  Detects new Level 1 agents via their L1 resonators and displays them in a popup
 // @author       iq1981
 // @match        https://intel.ingress.com/*
 // @grant        none
-// @require      https://code.jquery.com/jquery-3.6.0.min.js
 // ==/UserScript==
 
 /* global L, map */
@@ -19,16 +18,23 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
   const self = window.plugin.newL1Players = {};
 
   // ── Constants ──────────────────────────────────────────────────────────────
-  const RADII_KM      = [5, 10, 20, 50, 100, 200, 500, 1000];
+  const RADII_KM       = [5, 10, 20, 50, 100, 200, 500, 1000];
   const DEFAULT_RADIUS = 50;
   const CYAN           = '#00ffff';
-  const PLUGIN_ID      = 'l1p';
+  const ID             = 'l1p';
 
   // ── State ──────────────────────────────────────────────────────────────────
   // players[name] = { portals:[{guid,name,lat,lng}], firstSeen, lat, lng }
   self.players  = {};
-  self.markers  = {}; // name → L.circleMarker
+  self.markers  = {};
   self.radiusKm = DEFAULT_RADIUS;
+
+  // ── Device detection ───────────────────────────────────────────────────────
+  function isMobile () {
+    return window.innerWidth <= 640 ||
+           /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+           typeof window.useAndroidPanes === 'function'; // IITC-CE Mobile
+  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function haversineKm (lat1, lng1, lat2, lng2) {
@@ -48,10 +54,8 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
 
   function escHtml (str) {
     return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function formatTime (ts) {
@@ -64,22 +68,13 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
     if (!d || !d.portals.length) return;
 
     const pos = [d.lat, d.lng];
-    if (self.markers[name]) {
-      self.markers[name].setLatLng(pos);
-      return;
-    }
+    if (self.markers[name]) { self.markers[name].setLatLng(pos); return; }
 
     const m = L.circleMarker(pos, {
-      radius      : 10,
-      color       : CYAN,
-      fillColor   : CYAN,
-      fillOpacity : 0.25,
-      weight      : 2,
-      opacity     : 0.9
+      radius: 10, color: CYAN, fillColor: CYAN, fillOpacity: 0.25, weight: 2, opacity: 0.9
     });
     m.bindTooltip('<b style="color:#00ffff">L1 ' + escHtml(name) + '</b>', {
-      direction: 'top',
-      className: 'l1p-tooltip'
+      direction: 'top', className: `${ID}-tooltip`
     });
     m.addTo(window.map);
     self.markers[name] = m;
@@ -94,8 +89,7 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
   function onPortalDetailLoaded (data) {
     if (!data || !data.guid) return;
 
-    // Support both IITC-CE and classic data layouts
-    const details = (data.details) ||
+    const details = data.details ||
                     (window.portalDetail && window.portalDetail.get && window.portalDetail.get(data.guid));
     if (!details) return;
 
@@ -113,18 +107,11 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
       if (!reso || Number(reso.level) !== 1 || !reso.owner) return;
 
       const agent = reso.owner;
-
       if (!self.players[agent]) {
-        self.players[agent] = {
-          portals  : [],
-          firstSeen: now,
-          lat      : ll.lat,
-          lng      : ll.lng
-        };
+        self.players[agent] = { portals: [], firstSeen: now, lat: ll.lat, lng: ll.lng };
       }
 
-      const already = self.players[agent].portals.some(p => p.guid === data.guid);
-      if (!already) {
+      if (!self.players[agent].portals.some(p => p.guid === data.guid)) {
         self.players[agent].portals.push({ guid: data.guid, name: portalName, lat: ll.lat, lng: ll.lng });
       }
 
@@ -147,46 +134,46 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
 
     const rows = filtered.length
       ? filtered.map(({ name, d, dist }) => {
-          const portals = d.portals.map(p => escHtml(p.name)).join(', ');
+          const tip = d.portals.map(p => escHtml(p.name)).join(', ');
           return `<tr>
-            <td><span class="${PLUGIN_ID}-agent">${escHtml(name)}</span></td>
+            <td><span class="${ID}-agent">${escHtml(name)}</span></td>
             <td>${dist.toFixed(1)} km</td>
             <td>${formatTime(d.firstSeen)}</td>
-            <td title="${portals}">${d.portals.length}</td>
-            <td><button class="${PLUGIN_ID}-jump" data-agent="${escHtml(name)}" title="Zur Position springen">◎</button></td>
+            <td title="${tip}">${d.portals.length}</td>
+            <td><button class="${ID}-jump" data-agent="${escHtml(name)}" title="Zur Position springen">◎</button></td>
           </tr>`;
         }).join('')
-      : `<tr><td colspan="5" class="${PLUGIN_ID}-empty">Keine L1-Agenten in diesem Bereich erkannt.</td></tr>`;
+      : `<tr><td colspan="5" class="${ID}-empty">Keine L1-Agenten erkannt.</td></tr>`;
 
     return `
-      <div class="${PLUGIN_ID}-controls">
-        <span class="${PLUGIN_ID}-label">RADIUS</span>
-        <select id="${PLUGIN_ID}-radius">${radiusSel}</select>
-        <button id="${PLUGIN_ID}-clear">LEEREN</button>
-        <button id="${PLUGIN_ID}-refresh">↻</button>
+      <div class="${ID}-controls">
+        <span class="${ID}-label">RADIUS</span>
+        <select id="${ID}-radius">${radiusSel}</select>
+        <button id="${ID}-clear">LEEREN</button>
+        <button id="${ID}-refresh">↻</button>
       </div>
-      <div class="${PLUGIN_ID}-scroll">
-        <table id="${PLUGIN_ID}-table">
-          <thead>
-            <tr>
-              <th>Agent</th><th>Distanz</th><th>Erstsichtung</th><th>Portale</th><th></th>
-            </tr>
-          </thead>
+      <div class="${ID}-scroll">
+        <table id="${ID}-table">
+          <thead><tr>
+            <th>Agent</th><th>Distanz</th><th>Erstsichtung</th><th>Portale</th><th></th>
+          </tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div class="${PLUGIN_ID}-footer">${filtered.length} Agent(en) sichtbar · ${Object.keys(self.players).length} gesamt</div>`;
+      <div class="${ID}-footer">${filtered.length} Agent(en) · ${Object.keys(self.players).length} gesamt</div>`;
   }
 
   function rerender () {
-    const body = document.getElementById(`${PLUGIN_ID}-body`);
+    const body = document.getElementById(`${ID}-body`);
     if (!body) return;
     body.innerHTML = renderBody();
     bindBodyEvents();
   }
 
   function bindBodyEvents () {
-    const radiusSel = document.getElementById(`${PLUGIN_ID}-radius`);
+    const el = id => document.getElementById(`${ID}-${id}`);
+
+    const radiusSel = el('radius');
     if (radiusSel) {
       radiusSel.addEventListener('change', e => {
         self.radiusKm = parseInt(e.target.value, 10);
@@ -194,24 +181,17 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
       });
     }
 
-    const clearBtn = document.getElementById(`${PLUGIN_ID}-clear`);
+    const clearBtn = el('clear');
     if (clearBtn) {
-      clearBtn.addEventListener('click', () => {
-        self.players = {};
-        clearMarkers();
-        rerender();
-      });
+      clearBtn.addEventListener('click', () => { self.players = {}; clearMarkers(); rerender(); });
     }
 
-    const refreshBtn = document.getElementById(`${PLUGIN_ID}-refresh`);
-    if (refreshBtn) {
-      refreshBtn.addEventListener('click', rerender);
-    }
+    const refreshBtn = el('refresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', rerender);
 
-    document.querySelectorAll(`.${PLUGIN_ID}-jump`).forEach(btn => {
+    document.querySelectorAll(`.${ID}-jump`).forEach(btn => {
       btn.addEventListener('click', () => {
-        const agent = btn.dataset.agent;
-        const d     = self.players[agent];
+        const d = self.players[btn.dataset.agent];
         if (d) window.map.setView([d.lat, d.lng], Math.max(window.map.getZoom(), 15));
       });
     });
@@ -219,58 +199,124 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
 
   // ── Popup lifecycle ────────────────────────────────────────────────────────
   function togglePopup () {
-    const existing = document.getElementById(`${PLUGIN_ID}-popup`);
+    const existing = document.getElementById(`${ID}-popup`);
     if (existing) { existing.remove(); return; }
 
+    const mobile = isMobile();
+
     const popup = document.createElement('div');
-    popup.id = `${PLUGIN_ID}-popup`;
+    popup.id = `${ID}-popup`;
+    if (mobile) popup.classList.add(`${ID}-mobile`);
+
     popup.innerHTML = `
-      <div id="${PLUGIN_ID}-header">
+      ${mobile ? `<div id="${ID}-handle"><div id="${ID}-pill"></div></div>` : ''}
+      <div id="${ID}-header">
         <span>◈ NEW L1 AGENTS</span>
-        <button id="${PLUGIN_ID}-close" title="Schließen">✕</button>
+        <button id="${ID}-close" title="Schließen">✕</button>
       </div>
-      <div id="${PLUGIN_ID}-body">${renderBody()}</div>`;
+      <div id="${ID}-body">${renderBody()}</div>`;
+
     document.body.appendChild(popup);
 
-    document.getElementById(`${PLUGIN_ID}-close`).addEventListener('click', () => popup.remove());
+    document.getElementById(`${ID}-close`).addEventListener('click', () => popup.remove());
 
-    makeDraggable(popup, document.getElementById(`${PLUGIN_ID}-header`));
+    if (mobile) {
+      addSwipeClose(popup);
+    } else {
+      makeDraggable(popup, document.getElementById(`${ID}-header`));
+    }
+
     bindBodyEvents();
+
+    // Animate in on mobile
+    if (mobile) {
+      popup.style.transform = 'translateY(100%)';
+      requestAnimationFrame(() => {
+        popup.style.transition = 'transform 0.28s cubic-bezier(.2,.8,.3,1)';
+        popup.style.transform  = 'translateY(0)';
+      });
+    }
   }
 
-  // ── Drag support ───────────────────────────────────────────────────────────
+  // ── Swipe-down to close (mobile) ───────────────────────────────────────────
+  function addSwipeClose (el) {
+    const handle = document.getElementById(`${ID}-handle`);
+    if (!handle) return;
+
+    let startY = 0, currentY = 0, dragging = false;
+
+    handle.addEventListener('touchstart', e => {
+      startY  = e.touches[0].clientY;
+      dragging = true;
+      el.style.transition = 'none';
+    }, { passive: true });
+
+    handle.addEventListener('touchmove', e => {
+      if (!dragging) return;
+      currentY = e.touches[0].clientY - startY;
+      if (currentY > 0) el.style.transform = `translateY(${currentY}px)`;
+    }, { passive: true });
+
+    handle.addEventListener('touchend', () => {
+      dragging = false;
+      if (currentY > 80) {
+        el.style.transition = 'transform 0.2s ease';
+        el.style.transform  = 'translateY(100%)';
+        setTimeout(() => el.remove(), 200);
+      } else {
+        el.style.transition = 'transform 0.2s ease';
+        el.style.transform  = 'translateY(0)';
+      }
+      currentY = 0;
+    }, { passive: true });
+  }
+
+  // ── Mouse drag (desktop) ───────────────────────────────────────────────────
   function makeDraggable (el, handle) {
     let ox = 0, oy = 0;
     handle.style.cursor = 'move';
-    handle.addEventListener('mousedown', e => {
-      const rect = el.getBoundingClientRect();
-      ox = e.clientX - rect.left;
-      oy = e.clientY - rect.top;
 
-      const onMove = ev => {
-        el.style.left   = (ev.clientX - ox) + 'px';
-        el.style.top    = (ev.clientY - oy) + 'px';
-        el.style.right  = 'auto';
-        el.style.bottom = 'auto';
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      };
+    const start = (clientX, clientY) => {
+      const rect = el.getBoundingClientRect();
+      ox = clientX - rect.left;
+      oy = clientY - rect.top;
+    };
+    const move = (clientX, clientY) => {
+      el.style.left = (clientX - ox) + 'px';
+      el.style.top  = (clientY - oy) + 'px';
+      el.style.right = el.style.bottom = 'auto';
+    };
+
+    handle.addEventListener('mousedown', e => {
+      start(e.clientX, e.clientY);
+      const onMove = ev => move(ev.clientX, ev.clientY);
+      const onUp   = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
       e.preventDefault();
     });
+
+    // Touch drag on tablets (landscape, wider than 640px)
+    handle.addEventListener('touchstart', e => {
+      if (isMobile()) return;
+      start(e.touches[0].clientX, e.touches[0].clientY);
+      const onMove = ev => { ev.preventDefault(); move(ev.touches[0].clientX, ev.touches[0].clientY); };
+      const onEnd  = () => { handle.removeEventListener('touchmove', onMove); handle.removeEventListener('touchend', onEnd); };
+      handle.addEventListener('touchmove', onMove, { passive: false });
+      handle.addEventListener('touchend', onEnd, { passive: true });
+    }, { passive: true });
   }
 
   // ── Styles ─────────────────────────────────────────────────────────────────
   function injectStyles () {
     const css = `
-      /* ── Leaflet tooltip ── */
-      .l1p-tooltip { background: #0a0e1a; border: 1px solid #00ffff55; color: #ccc; font-family: 'Courier New', monospace; }
+      .${ID}-tooltip {
+        background: #0a0e1a; border: 1px solid #00ffff55;
+        color: #ccc; font-family: 'Courier New', monospace;
+      }
 
-      /* ── Toolbar button ── */
-      #l1p-toolbtn {
+      /* ── Toolbar / FAB button ── */
+      #${ID}-toolbtn {
         background: transparent;
         border: 1px solid #00ffff55;
         color: #00ffff;
@@ -281,16 +327,40 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
         letter-spacing: 1px;
         margin-left: 8px;
         vertical-align: middle;
+        -webkit-tap-highlight-color: transparent;
       }
-      #l1p-toolbtn:hover { background: #00ffff18; border-color: #00ffff; }
+      #${ID}-toolbtn:hover,
+      #${ID}-toolbtn:active { background: #00ffff18; border-color: #00ffff; }
+
+      /* FAB on mobile when no toolbox */
+      #${ID}-fab {
+        position: fixed;
+        bottom: 24px;
+        right: 16px;
+        z-index: 9999;
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        background: #080c18;
+        border: 2px solid #00ffff66;
+        color: #00ffff;
+        font-size: 22px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 16px #00ffff33;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #${ID}-fab:active { background: #00ffff18; }
 
       /* ── Popup shell ── */
-      #l1p-popup {
+      #${ID}-popup {
         position: fixed;
         top: 60px;
         right: 20px;
-        width: 540px;
-        max-height: 500px;
+        width: min(540px, 96vw);
+        max-height: min(500px, 80vh);
         background: #080c18;
         border: 1px solid #00ffff33;
         box-shadow: 0 0 24px #00ffff1a, inset 0 0 60px #00001a;
@@ -300,30 +370,56 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
         color: #9ab;
         display: flex;
         flex-direction: column;
-        user-select: none;
+        -webkit-overflow-scrolling: touch;
       }
 
-      /* scanline overlay */
-      #l1p-popup::before {
+      /* Scanline overlay */
+      #${ID}-popup::before {
         content: '';
         position: absolute;
         inset: 0;
         background: repeating-linear-gradient(
-          0deg,
-          transparent 0px,
-          transparent 3px,
-          rgba(0,255,255,0.012) 3px,
-          rgba(0,255,255,0.012) 4px
+          0deg, transparent 0px, transparent 3px,
+          rgba(0,255,255,0.012) 3px, rgba(0,255,255,0.012) 4px
         );
         pointer-events: none;
         z-index: 0;
       }
 
-      #l1p-header {
+      /* ── Mobile: bottom sheet ── */
+      #${ID}-popup.${ID}-mobile {
+        top: auto !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: 100% !important;
+        max-height: 75vh;
+        border-radius: 16px 16px 0 0;
+        border-bottom: none;
+      }
+
+      /* Pull handle */
+      #${ID}-handle {
+        display: flex;
+        justify-content: center;
+        padding: 10px 0 4px;
+        cursor: grab;
+        flex-shrink: 0;
+        z-index: 1;
+      }
+      #${ID}-pill {
+        width: 40px;
+        height: 4px;
+        border-radius: 2px;
+        background: #00ffff44;
+      }
+
+      /* ── Header ── */
+      #${ID}-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 7px 12px;
+        padding: 8px 14px;
         background: #00ffff14;
         border-bottom: 1px solid #00ffff28;
         color: #00ffff;
@@ -331,122 +427,140 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
         letter-spacing: 2px;
         z-index: 1;
         flex-shrink: 0;
+        cursor: move;
       }
+      #${ID}-popup.${ID}-mobile #${ID}-header { cursor: default; }
 
-      #l1p-close {
+      #${ID}-close {
         background: transparent;
         border: none;
         color: #00ffff88;
-        font-size: 13px;
+        font-size: 20px;
         cursor: pointer;
-        padding: 0 3px;
+        padding: 0 4px;
         line-height: 1;
+        min-width: 36px;
+        min-height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-tap-highlight-color: transparent;
       }
-      #l1p-close:hover { color: #fff; }
+      #${ID}-close:active { color: #fff; }
 
-      #l1p-body {
-        padding: 10px 12px;
+      /* ── Body ── */
+      #${ID}-body {
+        padding: 10px 14px;
         overflow-y: auto;
         flex: 1;
         z-index: 1;
+        -webkit-overflow-scrolling: touch;
       }
 
       /* ── Controls row ── */
-      .l1p-controls {
+      .${ID}-controls {
         display: flex;
         align-items: center;
         gap: 8px;
         margin-bottom: 10px;
+        flex-wrap: wrap;
       }
-      .l1p-label {
+      .${ID}-label {
         color: #00ffff;
         font-size: 11px;
         letter-spacing: 1px;
         flex-shrink: 0;
       }
-      #l1p-radius {
+      #${ID}-radius {
         background: #0a1628;
         color: #00ffff;
         border: 1px solid #00ffff44;
-        padding: 2px 5px;
+        padding: 6px 8px;
         font-family: 'Courier New', monospace;
-        font-size: 11px;
+        font-size: 16px; /* prevents iOS auto-zoom on focus */
+        min-height: 36px;
         flex-shrink: 0;
+        border-radius: 2px;
       }
-      #l1p-clear {
+      #${ID}-clear {
         background: transparent;
         border: 1px solid #ff660066;
         color: #ff6600cc;
-        padding: 2px 8px;
+        padding: 6px 12px;
         cursor: pointer;
         font-family: 'Courier New', monospace;
-        font-size: 10px;
+        font-size: 11px;
         letter-spacing: 1px;
+        min-height: 36px;
         flex-shrink: 0;
+        border-radius: 2px;
+        -webkit-tap-highlight-color: transparent;
       }
-      #l1p-clear:hover { border-color: #ff6600; color: #ff6600; }
-      #l1p-refresh {
+      #${ID}-clear:active { border-color: #ff6600; color: #ff6600; }
+      #${ID}-refresh {
         background: transparent;
         border: 1px solid #00ffff44;
         color: #00ffff88;
-        padding: 2px 7px;
+        padding: 6px 10px;
         cursor: pointer;
-        font-size: 13px;
+        font-size: 16px;
+        min-height: 36px;
         flex-shrink: 0;
+        border-radius: 2px;
+        -webkit-tap-highlight-color: transparent;
       }
-      #l1p-refresh:hover { color: #00ffff; border-color: #00ffff; }
+      #${ID}-refresh:active { color: #00ffff; border-color: #00ffff; }
 
       /* ── Table ── */
-      .l1p-scroll { overflow-x: auto; }
+      .${ID}-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
-      #l1p-table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      #l1p-table th {
+      #${ID}-table { width: 100%; border-collapse: collapse; }
+
+      #${ID}-table th {
         color: #00ffff;
         border-bottom: 1px solid #00ffff2a;
-        padding: 4px 8px;
+        padding: 6px 8px;
         text-align: left;
         font-size: 10px;
         letter-spacing: 1px;
         white-space: nowrap;
         font-weight: normal;
       }
-      #l1p-table td {
-        padding: 5px 8px;
+      #${ID}-table td {
+        padding: 8px 8px;
         border-bottom: 1px solid #ffffff08;
         vertical-align: middle;
         white-space: nowrap;
       }
-      #l1p-table tr:hover td { background: #00ffff08; }
+      #${ID}-table tr:active td { background: #00ffff0a; }
 
-      .l1p-agent { color: #00ffff; font-weight: bold; }
+      .${ID}-agent { color: #00ffff; font-weight: bold; }
 
-      .l1p-jump {
+      .${ID}-jump {
         background: transparent;
         border: 1px solid #00ffff44;
         color: #00ffff88;
         cursor: pointer;
-        font-size: 14px;
-        padding: 1px 5px;
-        line-height: 1;
+        font-size: 20px;
+        min-width: 40px;
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        -webkit-tap-highlight-color: transparent;
       }
-      .l1p-jump:hover { background: #00ffff18; border-color: #00ffff; color: #00ffff; }
+      .${ID}-jump:active { background: #00ffff18; border-color: #00ffff; color: #00ffff; }
 
-      .l1p-empty {
-        text-align: center;
-        color: #445;
-        padding: 18px 0;
-      }
+      .${ID}-empty { text-align: center; color: #445; padding: 22px 0; }
 
-      /* ── Footer ── */
-      .l1p-footer {
+      .${ID}-footer {
         margin-top: 8px;
         color: #334;
         font-size: 10px;
         text-align: center;
         letter-spacing: 1px;
+        padding-bottom: env(safe-area-inset-bottom, 0px); /* iPhone notch */
       }
     `;
     const el = document.createElement('style');
@@ -458,20 +572,26 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
   self.setup = function () {
     injectStyles();
 
-    // Add button to IITC toolbox
-    const btn = document.createElement('button');
-    btn.id        = `${PLUGIN_ID}-toolbtn`;
-    btn.textContent = '◈ L1 AGENTS';
-    btn.title       = 'Neue Level-1-Agenten anzeigen';
-    btn.addEventListener('click', togglePopup);
-
+    const mobile  = isMobile();
     const toolbox = document.getElementById('toolbox');
-    if (toolbox) {
+
+    if (toolbox && !mobile) {
+      // Desktop: text button in IITC toolbar
+      const btn = document.createElement('button');
+      btn.id          = `${ID}-toolbtn`;
+      btn.textContent = '◈ L1 AGENTS';
+      btn.title       = 'Neue Level-1-Agenten anzeigen';
+      btn.addEventListener('click', togglePopup);
       toolbox.appendChild(btn);
     } else {
-      // Fallback: fixed-position button
-      btn.style.cssText = 'position:fixed;bottom:24px;left:60px;z-index:9999;';
-      document.body.appendChild(btn);
+      // Mobile / fallback: circular FAB (Floating Action Button)
+      const fab = document.createElement('button');
+      fab.id          = `${ID}-fab`;
+      fab.textContent = '◈';
+      fab.title       = 'Neue Level-1-Agenten anzeigen';
+      fab.setAttribute('aria-label', 'L1 Agents');
+      fab.addEventListener('click', togglePopup);
+      document.body.appendChild(fab);
     }
 
     window.addHook('portalDetailLoaded', onPortalDetailLoaded);
