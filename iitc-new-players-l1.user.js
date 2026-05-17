@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.1.1
+// @version      1.1.2
 // @description  Detects new Level 1 agents via their L1 resonators and displays them in a popup
 // @author       iq1981
 // @match        https://intel.ingress.com/*
@@ -315,7 +315,7 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
         color: #ccc; font-family: 'Courier New', monospace;
       }
 
-      /* ── Toolbar / FAB button ── */
+      /* ── Toolbar button ── */
       #${ID}-toolbtn {
         background: transparent;
         border: 1px solid #00ffff55;
@@ -327,10 +327,26 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
         letter-spacing: 1px;
         margin-left: 8px;
         vertical-align: middle;
+        min-height: 32px;
         -webkit-tap-highlight-color: transparent;
       }
       #${ID}-toolbtn:hover,
       #${ID}-toolbtn:active { background: #00ffff18; border-color: #00ffff; }
+
+      /* On mobile the toolbox renders as left-side icon buttons — match that style */
+      @media (max-width: 640px) {
+        #${ID}-toolbtn {
+          display: block;
+          width: 100%;
+          margin: 0;
+          padding: 8px 4px;
+          font-size: 18px;
+          letter-spacing: 0;
+          border: none;
+          border-top: 1px solid #00ffff22;
+          min-height: 44px;
+        }
+      }
 
       /* FAB on mobile when no toolbox */
       #${ID}-fab {
@@ -575,16 +591,17 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
     const mobile  = isMobile();
     const toolbox = document.getElementById('toolbox');
 
-    if (toolbox && !mobile) {
-      // Desktop: text button in IITC toolbar
+    if (toolbox) {
+      // IITC toolbox exists on all platforms — always use it.
+      // On desktop it renders as a text link; on iOS/Android as a sidebar icon.
       const btn = document.createElement('button');
       btn.id          = `${ID}-toolbtn`;
-      btn.textContent = '◈ L1 AGENTS';
+      btn.textContent = mobile ? '◈' : '◈ L1 AGENTS';
       btn.title       = 'Neue Level-1-Agenten anzeigen';
       btn.addEventListener('click', togglePopup);
       toolbox.appendChild(btn);
     } else {
-      // Mobile / fallback: circular FAB (Floating Action Button)
+      // No toolbox (rare fallback): floating button well below any header
       const fab = document.createElement('button');
       fab.id          = `${ID}-fab`;
       fab.textContent = '◈';
