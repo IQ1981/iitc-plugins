@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.1.2
+// @version      1.2.0
 // @description  Detects new Level 1 agents via their L1 resonators and displays them in a popup
 // @author       iq1981
 // @match        https://intel.ingress.com/*
@@ -315,7 +315,7 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
         color: #ccc; font-family: 'Courier New', monospace;
       }
 
-      /* ── Toolbar button ── */
+      /* ── Desktop toolbar button ── */
       #${ID}-toolbtn {
         background: transparent;
         border: 1px solid #00ffff55;
@@ -333,42 +333,32 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
       #${ID}-toolbtn:hover,
       #${ID}-toolbtn:active { background: #00ffff18; border-color: #00ffff; }
 
-      /* On mobile the toolbox renders as left-side icon buttons — match that style */
-      @media (max-width: 640px) {
-        #${ID}-toolbtn {
-          display: block;
-          width: 100%;
-          margin: 0;
-          padding: 8px 4px;
-          font-size: 18px;
-          letter-spacing: 0;
-          border: none;
-          border-top: 1px solid #00ffff22;
-          min-height: 44px;
-        }
-      }
-
-      /* FAB on mobile when no toolbox */
+      /* ── FAB — always visible on mobile, left column below plugin buttons ── */
       #${ID}-fab {
         position: fixed;
-        top: 60px;
-        right: 10px;
-        z-index: 99999;
-        width: 48px;
-        height: 48px;
+        bottom: 110px;
+        left: 4px;
+        z-index: 2147483647;
+        width: 44px;
+        height: 44px;
         border-radius: 50%;
-        background: #080c18ee;
-        border: 2px solid #00ffff88;
-        color: #00ffff;
-        font-size: 20px;
+        background: #00ffff;
+        border: none;
+        color: #000;
+        font-size: 22px;
+        font-weight: bold;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 0 16px #00ffff44;
+        box-shadow: 0 0 0 3px #000, 0 0 20px #00ffff99;
         -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
       }
-      #${ID}-fab:active { background: #00ffff22; }
+      #${ID}-fab:active {
+        transform: scale(0.92);
+        background: #00dddd;
+      }
 
       /* ── Popup shell ── */
       #${ID}-popup {
@@ -591,24 +581,29 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
     const mobile  = isMobile();
     const toolbox = document.getElementById('toolbox');
 
-    if (toolbox) {
-      // IITC toolbox exists on all platforms — always use it.
-      // On desktop it renders as a text link; on iOS/Android as a sidebar icon.
-      const btn = document.createElement('button');
-      btn.id          = `${ID}-toolbtn`;
-      btn.textContent = mobile ? '◈' : '◈ L1 AGENTS';
-      btn.title       = 'Neue Level-1-Agenten anzeigen';
-      btn.addEventListener('click', togglePopup);
-      toolbox.appendChild(btn);
-    } else {
-      // No toolbox (rare fallback): floating button well below any header
+    if (mobile) {
+      // Always show a solid cyan FAB on mobile — left column, above the bottom bar.
+      // This is guaranteed visible regardless of toolbox availability.
       const fab = document.createElement('button');
-      fab.id          = `${ID}-fab`;
+      fab.id    = `${ID}-fab`;
       fab.textContent = '◈';
-      fab.title       = 'Neue Level-1-Agenten anzeigen';
+      fab.title = 'Neue Level-1-Agenten anzeigen';
       fab.setAttribute('aria-label', 'L1 Agents');
       fab.addEventListener('click', togglePopup);
       document.body.appendChild(fab);
+    } else {
+      // Desktop: text button in the IITC toolbox
+      const toolboxBtn = document.createElement('button');
+      toolboxBtn.id          = `${ID}-toolbtn`;
+      toolboxBtn.textContent = '◈ L1 AGENTS';
+      toolboxBtn.title       = 'Neue Level-1-Agenten anzeigen';
+      toolboxBtn.addEventListener('click', togglePopup);
+      if (toolbox) {
+        toolbox.appendChild(toolboxBtn);
+      } else {
+        toolboxBtn.style.cssText = 'position:fixed;bottom:24px;left:60px;z-index:9999;';
+        document.body.appendChild(toolboxBtn);
+      }
     }
 
     window.addHook('portalDetailLoaded', onPortalDetailLoaded);
