@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.4.0
-// @description  Tracks new L1 agents and detects when they complete training (level up)
+// @version      1.5.0
+// @description  Tracks new L1 agents and training completions — filterable by faction
 // @author       iq1981
 // @match        https://intel.ingress.com/*
 // @grant        none
@@ -23,19 +23,24 @@ function pluginMain () {
   const RADII_KM       = [5, 10, 20, 50, 100, 200, 500, 1000];
   const DEFAULT_RADIUS = 50;
   const ID             = 'l1p';
-  const CYAN           = '#00ffff';
-  const LIME           = '#39ff14';
+
+  // Faction colours — match official Ingress palette
+  const F = {
+    R: { l1: '#0088ff', grad: '#55aaff', label: '⬡ RES', name: 'Resistance' },
+    E: { l1: '#03dc03', grad: '#44ff44', label: '⬡ ENL', name: 'Enlightened' },
+    N: { l1: '#888888', grad: '#aaaaaa', label: '○ N/A', name: 'Neutral' }
+  };
 
   // ── State ────────────────────────────────────────────────────────────────
-  // players[name]   = { portals, firstSeen, lat, lng }   ← active L1 agents
-  // graduated[name] = { portals, firstSeen, lat, lng,    ← training completed
-  //                     graduatedAt, level }
-  self.players    = {};
-  self.graduated  = {};
-  self.markers    = {};     // L1 markers (cyan)
-  self.gradMarkers= {};     // Graduated markers (lime)
-  self.radiusKm   = DEFAULT_RADIUS;
-  self.activeTab  = 'l1';  // 'l1' | 'grad'
+  // players[name]   = { portals, firstSeen, lat, lng, faction }
+  // graduated[name] = { portals, firstSeen, lat, lng, faction, graduatedAt, level }
+  self.players      = {};
+  self.graduated    = {};
+  self.markers      = {};
+  self.gradMarkers  = {};
+  self.radiusKm     = DEFAULT_RADIUS;
+  self.activeTab    = 'l1';    // 'l1' | 'grad'
+  self.factionFilter= 'all';   // 'all' | 'R' | 'E'
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   function haversineKm (lat1, lng1, lat2, lng2) {
@@ -61,6 +66,16 @@ function pluginMain () {
 
   function formatTime (ts) {
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // Detect faction from portal team value (handles int and string variants)
+  function getFaction (portal) {
+    const t   = portal.options && portal.options.data && portal.options.data.team;
+    const RES = (typeof window.TEAM_RES !== 'undefined') ? window.TEAM_RES : 1;
+    const ENL = (typeof window.TEAM_ENL !== 'undefined') ? window.TEAM_ENL : 2;
+    if (t === RES || t === 'R' || t === 1) return 'R';
+    if (t === ENL || t === 'E' || t === 2) return 'E';
+    return 'N';
   }
 
   // ── Marker management ────────────────────────────────────────────────────
@@ -100,6 +115,7 @@ function pluginMain () {
 
     const ll         = portal.getLatLng();
     const portalName = (portal.options.data && portal.options.data.title) || 'Unknown Portal';
+    const faction    = getFaction(portal);
     const now        = Date.now();
     let   changed    = false;
 
@@ -109,36 +125,27 @@ function pluginMain () {
       const agent = reso.owner;
 
       if (level === 1 && !self.graduated[agent]) {
-        // ── Active L1 agent ──
         if (!self.players[agent]) {
-          self.players[agent] = { portals: [], firstSeen: now, lat: ll.lat, lng: ll.lng };
+          self.players[agent] = { portals: [], firstSeen: now, lat: ll.lat, lng: ll.lng, faction };
           changed = true;
         }
         if (!self.players[agent].portals.some(p => p.guid === data.guid)) {
           self.players[agent].portals.push({ guid: data.guid, name: portalName, lat: ll.lat, lng: ll.lng });
         }
-        putMarker(agent, ll.lat, ll.lng, CYAN, 'L1 ' + agent, self.markers);
+        const fc = F[faction] || F.N;
+        putMarker(agent, ll.lat, ll.lng, fc.l1, 'L1 ' + agent, self.markers);
 
       } else if (level >= 2 && self.players[agent] && !self.graduated[agent]) {
-        // ── Training completed: was L1, now L2+ ──
-        self.graduated[agent] = {
-          ...self.players[agent],
-          graduatedAt: now,
-          level
-        };
+        self.graduated[agent] = { ...self.players[agent], graduatedAt: now, level };
         delete self.players[agent];
         removeMarker(agent, self.markers);
-        putMarker(agent, ll.lat, ll.lng, LIME, '✓ L' + level + ' ' + agent, self.gradMarkers);
+        const fc = F[faction] || F.N;
+        putMarker(agent, ll.lat, ll.lng, fc.grad, '✓ L' + level + ' ' + agent, self.gradMarkers);
         changed = true;
       }
     });
 
-    if (changed) rerenderSilent();
-  }
-
-  // Silent rerender (update badge counts without full popup rebuild)
-  function rerenderSilent () {
-    updateBadges();
+    if (changed) updateBadges();
   }
 
   // ── Rendering helpers ────────────────────────────────────────────────────
@@ -146,8 +153,16 @@ function pluginMain () {
     const { lat, lng } = mapCenter();
     return Object.entries(collection)
       .map(([name, d]) => ({ name, d, dist: haversineKm(lat, lng, d.lat, d.lng) }))
-      .filter(({ dist }) => dist <= self.radiusKm)
+      .filter(({ dist, d }) =>
+        dist <= self.radiusKm &&
+        (self.factionFilter === 'all' || d.faction === self.factionFilter)
+      )
       .sort((a, b) => a.dist - b.dist);
+  }
+
+  function factionDot (faction) {
+    const color = (F[faction] || F.N).l1;
+    return `<span class="${ID}-fdot" style="background:${color}" title="${(F[faction]||F.N).name}"></span>`;
   }
 
   function renderL1Table () {
@@ -155,8 +170,9 @@ function pluginMain () {
     if (!rows.length) return `<tr><td colspan="5" class="${ID}-empty">Keine aktiven L1-Agenten erkannt.</td></tr>`;
     return rows.map(({ name, d, dist }) => {
       const tip = d.portals.map(p => escHtml(p.name)).join(', ');
+      const col = (F[d.faction] || F.N).l1;
       return `<tr>
-        <td><span class="${ID}-agent">${escHtml(name)}</span></td>
+        <td>${factionDot(d.faction)}<span class="${ID}-agent" style="color:${col}">${escHtml(name)}</span></td>
         <td>${dist.toFixed(1)} km</td>
         <td>${formatTime(d.firstSeen)}</td>
         <td title="${tip}">${d.portals.length}</td>
@@ -170,9 +186,10 @@ function pluginMain () {
     if (!rows.length) return `<tr><td colspan="6" class="${ID}-empty">Noch kein Agent hat das Training abgeschlossen.</td></tr>`;
     return rows.map(({ name, d, dist }) => {
       const tip = d.portals.map(p => escHtml(p.name)).join(', ');
+      const col = (F[d.faction] || F.N).grad;
       return `<tr>
-        <td><span class="${ID}-agent-grad">${escHtml(name)}</span></td>
-        <td class="${ID}-lvl">L${d.level}</td>
+        <td>${factionDot(d.faction)}<span class="${ID}-agent" style="color:${col}">${escHtml(name)}</span></td>
+        <td class="${ID}-lvl" style="color:${col}">L${d.level}</td>
         <td>${dist.toFixed(1)} km</td>
         <td>${formatTime(d.firstSeen)}</td>
         <td>${formatTime(d.graduatedAt)}</td>
@@ -182,13 +199,18 @@ function pluginMain () {
   }
 
   function renderBody () {
-    const { lat, lng } = mapCenter();
     const l1Count   = filteredByRadius(self.players).length;
     const gradCount = filteredByRadius(self.graduated).length;
 
     const radiusSel = RADII_KM.map(r =>
       `<option value="${r}"${r === self.radiusKm ? ' selected' : ''}>${r} km</option>`
     ).join('');
+
+    const fBtns = ['all', 'R', 'E'].map(f => {
+      const label  = f === 'all' ? 'ALLE' : F[f].label;
+      const active = self.factionFilter === f ? ' active' : '';
+      return `<button class="${ID}-fbtn${active}" data-f="${f}">${label}</button>`;
+    }).join('');
 
     const l1Body = `
       <table class="${ID}-table">
@@ -213,12 +235,13 @@ function pluginMain () {
         <button id="${ID}-clear">LEEREN</button>
         <button id="${ID}-refresh">↻</button>
       </div>
+      <div class="${ID}-faction-row">${fBtns}</div>
       <div class="${ID}-tabs">
         <button class="${ID}-tab${self.activeTab === 'l1'   ? ' active' : ''}" data-tab="l1">
-          L1 AGENTEN <span class="${ID}-badge">${l1Count}</span>
+          L1 AGENTEN <span class="${ID}-badge" id="${ID}-b1">${l1Count}</span>
         </button>
         <button class="${ID}-tab${self.activeTab === 'grad' ? ' active' : ''}" data-tab="grad">
-          TRAINING ✓ <span class="${ID}-badge ${ID}-badge-grad">${gradCount}</span>
+          TRAINING ✓ <span class="${ID}-badge ${ID}-badge-grad" id="${ID}-b2">${gradCount}</span>
         </button>
       </div>
       <div class="${ID}-scroll">
@@ -226,7 +249,7 @@ function pluginMain () {
         <div id="${ID}-panel-grad" style="display:${self.activeTab === 'grad' ? 'block' : 'none'}">${gradBody}</div>
       </div>
       <div class="${ID}-footer">
-        ${l1Count} L1 aktiv · ${gradCount} Training abgeschlossen · ${Object.keys(self.players).length + Object.keys(self.graduated).length} gesamt
+        ${l1Count} L1 aktiv · ${gradCount} Training ✓ · ${Object.keys(self.players).length + Object.keys(self.graduated).length} gesamt
       </div>`;
   }
 
@@ -238,9 +261,8 @@ function pluginMain () {
   }
 
   function updateBadges () {
-    const { lat, lng } = mapCenter();
-    const b1 = document.querySelector(`.${ID}-badge:not(.${ID}-badge-grad)`);
-    const b2 = document.querySelector(`.${ID}-badge-grad`);
+    const b1 = document.getElementById(`${ID}-b1`);
+    const b2 = document.getElementById(`${ID}-b2`);
     if (b1) b1.textContent = filteredByRadius(self.players).length;
     if (b2) b2.textContent = filteredByRadius(self.graduated).length;
   }
@@ -253,25 +275,29 @@ function pluginMain () {
     if (r) r.addEventListener('change', e => { self.radiusKm = parseInt(e.target.value, 10); rerender(); });
 
     const c = el('clear');
-    if (c) c.addEventListener('click', () => {
-      self.players = {}; self.graduated = {};
-      clearAllMarkers();
-      rerender();
-    });
+    if (c) c.addEventListener('click', () => { self.players = {}; self.graduated = {}; clearAllMarkers(); rerender(); });
 
     const rf = el('refresh');
     if (rf) rf.addEventListener('click', rerender);
 
-    // Tabs
+    // Faction filter buttons
+    document.querySelectorAll(`.${ID}-fbtn`).forEach(btn => {
+      btn.addEventListener('click', () => {
+        self.factionFilter = btn.dataset.f;
+        rerender();
+      });
+    });
+
+    // Content tabs
     document.querySelectorAll(`.${ID}-tab`).forEach(tab => {
       tab.addEventListener('click', () => {
         self.activeTab = tab.dataset.tab;
         document.querySelectorAll(`.${ID}-tab`).forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        const l1   = document.getElementById(`${ID}-panel-l1`);
-        const grad = document.getElementById(`${ID}-panel-grad`);
-        if (l1)   l1.style.display   = self.activeTab === 'l1'   ? 'block' : 'none';
-        if (grad) grad.style.display  = self.activeTab === 'grad' ? 'block' : 'none';
+        const p1 = document.getElementById(`${ID}-panel-l1`);
+        const p2 = document.getElementById(`${ID}-panel-grad`);
+        if (p1) p1.style.display = self.activeTab === 'l1'   ? 'block' : 'none';
+        if (p2) p2.style.display = self.activeTab === 'grad' ? 'block' : 'none';
       });
     });
 
@@ -352,36 +378,29 @@ function pluginMain () {
 
       /* ── FAB ── */
       #${ID}-fab {
-        position: fixed !important;
-        bottom: 120px !important;
-        left: 4px !important;
+        position: fixed !important; bottom: 120px !important; left: 4px !important;
         z-index: 2147483647 !important;
-        width: 44px; height: 44px;
-        border-radius: 50%;
-        background: #00e5ff !important;
-        border: 3px solid #000 !important;
-        color: #000 !important;
-        font-size: 20px; font-weight: 900; line-height: 1;
-        cursor: pointer;
+        width: 44px; height: 44px; border-radius: 50%;
+        background: #00e5ff !important; border: 3px solid #000 !important; color: #000 !important;
+        font-size: 20px; font-weight: 900; line-height: 1; cursor: pointer;
         display: flex !important; align-items: center; justify-content: center;
         box-shadow: 0 2px 12px rgba(0,229,255,.7) !important;
-        -webkit-tap-highlight-color: transparent;
-        touch-action: manipulation; outline: none;
+        -webkit-tap-highlight-color: transparent; touch-action: manipulation; outline: none;
       }
       #${ID}-fab:active { transform: scale(.92); background: #00b8d4 !important; }
 
-      /* ── Desktop toolbox button ── */
+      /* ── Desktop toolbox ── */
       #${ID}-toolbtn {
         background: transparent; border: 1px solid #00ffff55; color: #00ffff;
         padding: 3px 10px; cursor: pointer; font-family: monospace; font-size: 11px;
         letter-spacing: 1px; margin-left: 8px; vertical-align: middle; min-height: 32px;
       }
-      #${ID}-toolbtn:hover { background:#00ffff18; }
+      #${ID}-toolbtn:hover { background: #00ffff18; }
 
-      /* ── Popup shell ── */
+      /* ── Popup ── */
       #${ID}-popup {
         position: fixed; top: 60px; right: 20px;
-        width: min(580px, 96vw); max-height: min(540px, 82vh);
+        width: min(600px, 96vw); max-height: min(560px, 84vh);
         background: #080c18; border: 1px solid #00ffff33;
         box-shadow: 0 0 24px #00ffff1a;
         z-index: 10000; font-family: monospace; font-size: 12px; color: #9ab;
@@ -393,14 +412,10 @@ function pluginMain () {
       }
       #${ID}-popup.${ID}-mobile {
         top:auto !important; bottom:0 !important; left:0 !important; right:0 !important;
-        width:100% !important; max-height:80vh; border-radius:16px 16px 0 0; border-bottom:none;
+        width:100% !important; max-height:82vh; border-radius:16px 16px 0 0; border-bottom:none;
       }
-
-      /* ── Handle / pill ── */
       #${ID}-handle { display:flex; justify-content:center; padding:10px 0 4px; flex-shrink:0; z-index:1; }
       #${ID}-pill   { width:40px; height:4px; border-radius:2px; background:#00ffff44; }
-
-      /* ── Header ── */
       #${ID}-header {
         display:flex; justify-content:space-between; align-items:center;
         padding:8px 14px; background:#00ffff14; border-bottom:1px solid #00ffff28;
@@ -412,12 +427,10 @@ function pluginMain () {
         display:flex; align-items:center; justify-content:center;
         -webkit-tap-highlight-color:transparent;
       }
-
-      /* ── Body ── */
       #${ID}-body { padding:10px 14px; overflow-y:auto; flex:1; z-index:1; -webkit-overflow-scrolling:touch; }
 
       /* ── Controls ── */
-      .${ID}-controls { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+      .${ID}-controls { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
       .${ID}-label    { color:#00ffff; font-size:11px; letter-spacing:1px; }
       #${ID}-radius {
         background:#0a1628; color:#00ffff; border:1px solid #00ffff44;
@@ -428,38 +441,52 @@ function pluginMain () {
         padding:6px 12px; cursor:pointer; font-size:11px; min-height:40px; border-radius:2px;
         -webkit-tap-highlight-color:transparent;
       }
-      #${ID}-clear:active  { border-color:#ff6600; color:#ff6600; }
+      #${ID}-clear:active { border-color:#ff6600; color:#ff6600; }
       #${ID}-refresh {
         background:transparent; border:1px solid #00ffff44; color:#00ffff88;
         padding:6px 10px; cursor:pointer; font-size:16px; min-height:40px; border-radius:2px;
         -webkit-tap-highlight-color:transparent;
       }
-      #${ID}-refresh:active { color:#00ffff; }
+
+      /* ── Faction filter row ── */
+      .${ID}-faction-row {
+        display: flex; gap: 6px; margin-bottom: 10px;
+      }
+      .${ID}-fbtn {
+        flex: 1; background: transparent; border: 1px solid #ffffff22; color: #556;
+        padding: 6px 4px; cursor: pointer; font-family: monospace; font-size: 11px;
+        min-height: 36px; border-radius: 3px; letter-spacing: .5px;
+        -webkit-tap-highlight-color: transparent; transition: all .15s;
+      }
+      .${ID}-fbtn.active         { color:#fff;     border-color:#ffffff66; background:#ffffff11; }
+      .${ID}-fbtn[data-f="R"].active { color:#0088ff; border-color:#0088ff99; background:#0088ff15; }
+      .${ID}-fbtn[data-f="E"].active { color:#03dc03; border-color:#03dc0399; background:#03dc0315; }
 
       /* ── Tabs ── */
       .${ID}-tabs {
-        display: flex; border-bottom: 1px solid #00ffff22; margin-bottom: 10px;
-        flex-shrink: 0;
+        display:flex; border-bottom:1px solid #00ffff22; margin-bottom:10px; flex-shrink:0;
       }
       .${ID}-tab {
-        flex: 1; background: transparent; border: none; border-bottom: 2px solid transparent;
-        color: #556; padding: 8px 4px; cursor: pointer; font-family: monospace;
-        font-size: 11px; letter-spacing: 1px; min-height: 40px;
-        display: flex; align-items: center; justify-content: center; gap: 6px;
-        -webkit-tap-highlight-color: transparent;
-        transition: color .15s, border-color .15s;
+        flex:1; background:transparent; border:none; border-bottom:2px solid transparent;
+        color:#445; padding:8px 4px; cursor:pointer; font-family:monospace;
+        font-size:11px; letter-spacing:1px; min-height:40px;
+        display:flex; align-items:center; justify-content:center; gap:6px;
+        -webkit-tap-highlight-color:transparent; transition:color .15s, border-color .15s;
       }
-      .${ID}-tab.active        { color:#00ffff; border-bottom-color:#00ffff; }
-      .${ID}-tab:nth-child(2).active { color:#39ff14; border-bottom-color:#39ff14; }
+      .${ID}-tab.active             { color:#00ffff; border-bottom-color:#00ffff; }
+      .${ID}-tab[data-tab="grad"].active { color:#44ff44; border-bottom-color:#44ff44; }
 
       /* ── Badges ── */
-      .${ID}-badge {
-        background:#00ffff22; color:#00ffff; border-radius:10px;
-        padding:1px 7px; font-size:10px; min-width:20px; text-align:center;
-      }
-      .${ID}-badge-grad { background:#39ff1422; color:#39ff14; }
+      .${ID}-badge      { background:#00ffff22; color:#00ffff; border-radius:10px; padding:1px 7px; font-size:10px; }
+      .${ID}-badge-grad { background:#44ff4422; color:#44ff44; }
 
-      /* ── Scroll + Table ── */
+      /* ── Faction dot ── */
+      .${ID}-fdot {
+        display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+        margin-right: 5px; vertical-align: middle; flex-shrink: 0;
+      }
+
+      /* ── Table ── */
       .${ID}-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
       .${ID}-table  { width:100%; border-collapse:collapse; }
       .${ID}-table th {
@@ -467,26 +494,19 @@ function pluginMain () {
         padding:6px 8px; text-align:left; font-size:10px; letter-spacing:1px;
         white-space:nowrap; font-weight:normal;
       }
-      .${ID}-table td { padding:8px; border-bottom:1px solid #ffffff08; vertical-align:middle; white-space:nowrap; }
-      .${ID}-table tr:active td { background:#00ffff06; }
-
-      .${ID}-agent      { color:#00ffff; font-weight:bold; }
-      .${ID}-agent-grad { color:#39ff14; font-weight:bold; }
-      .${ID}-lvl        { color:#39ff14; font-weight:bold; text-align:center; }
-
+      .${ID}-table td  { padding:8px; border-bottom:1px solid #ffffff08; vertical-align:middle; white-space:nowrap; }
+      .${ID}-table tr:active td { background:#ffffff05; }
+      .${ID}-agent { font-weight:bold; }
+      .${ID}-lvl   { font-weight:bold; text-align:center; }
       .${ID}-jump {
-        background:transparent; border:1px solid #00ffff33; color:#00ffff77;
+        background:transparent; border:1px solid #ffffff22; color:#aaa;
         cursor:pointer; font-size:20px; min-width:44px; min-height:44px;
         display:inline-flex; align-items:center; justify-content:center; border-radius:4px;
         -webkit-tap-highlight-color:transparent;
       }
-      .${ID}-jump:active { background:#00ffff18; border-color:#00ffff; color:#00ffff; }
-
+      .${ID}-jump:active { background:#ffffff10; color:#fff; }
       .${ID}-empty  { text-align:center; color:#334; padding:22px 0; }
-      .${ID}-footer {
-        margin-top:8px; color:#334; font-size:10px; text-align:center; letter-spacing:.5px;
-        padding-bottom:env(safe-area-inset-bottom, 0px);
-      }
+      .${ID}-footer { margin-top:8px; color:#334; font-size:10px; text-align:center; padding-bottom:env(safe-area-inset-bottom,0px); }
     `;
     document.head.appendChild(s);
   }
@@ -515,7 +535,7 @@ function pluginMain () {
     }
 
     window.addHook('portalDetailLoaded', onPortalDetailLoaded);
-    console.log('[IITC-L1Players] v1.4.0 geladen.');
+    console.log('[IITC-L1Players] v1.5.0 geladen.');
   };
 
   // ── Bootstrap ────────────────────────────────────────────────────────────
