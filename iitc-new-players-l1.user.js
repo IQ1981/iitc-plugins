@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.1.0
+// @version      1.1.1
 // @description  Detects new Level 1 agents via their L1 resonators and displays them in a popup
 // @author       iq1981
 // @match        https://intel.ingress.com/*
@@ -335,24 +335,24 @@ function wrapper (plugin_info) { // eslint-disable-line no-unused-vars
       /* FAB on mobile when no toolbox */
       #${ID}-fab {
         position: fixed;
-        bottom: 24px;
-        right: 16px;
-        z-index: 9999;
-        width: 52px;
-        height: 52px;
+        top: 60px;
+        right: 10px;
+        z-index: 99999;
+        width: 48px;
+        height: 48px;
         border-radius: 50%;
-        background: #080c18;
-        border: 2px solid #00ffff66;
+        background: #080c18ee;
+        border: 2px solid #00ffff88;
         color: #00ffff;
-        font-size: 22px;
+        font-size: 20px;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 0 16px #00ffff33;
+        box-shadow: 0 0 16px #00ffff44;
         -webkit-tap-highlight-color: transparent;
       }
-      #${ID}-fab:active { background: #00ffff18; }
+      #${ID}-fab:active { background: #00ffff22; }
 
       /* ── Popup shell ── */
       #${ID}-popup {
