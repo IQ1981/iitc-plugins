@@ -95,6 +95,7 @@ function wrapper(plugin_info) {
     self.incidents.push(incident);
     saveIncidents();
     showNotification(incident);
+    updateBadge();
     updateSidebar();
   }
 
@@ -551,6 +552,45 @@ function wrapper(plugin_info) {
   // ─── CSS ──────────────────────────────────────────────────────────────────────
   function injectCSS() {
     $('<style>').text(`
+      /* ── FAB button + slide-up panel ── */
+      #spoofer-fab-wrapper {
+        position: fixed; bottom: 16px; right: 16px; z-index: 8000;
+        display: flex; flex-direction: column; align-items: flex-end;
+      }
+
+      #spoofer-fab-btn {
+        position: relative;
+        background: #e67e22; color: #fff; border: none;
+        padding: 9px 16px; border-radius: 24px; font-size: 13px; font-weight: bold;
+        cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,.5);
+        transition: background .2s, transform .2s;
+        white-space: nowrap;
+      }
+      #spoofer-fab-btn:hover  { background: #d35400; }
+      #spoofer-fab-btn.active { background: #c0392b; border-radius: 0 0 24px 24px; }
+
+      #spoofer-fab-badge {
+        display: inline-block; background: #fff; color: #c0392b;
+        font-size: 10px; font-weight: bold; border-radius: 10px;
+        padding: 1px 5px; margin-left: 6px; vertical-align: middle;
+      }
+
+      #spoofer-floating-panel {
+        width: 320px;
+        background: #111; border: 1px solid #444; border-radius: 6px 6px 0 0;
+        box-shadow: 0 -4px 16px rgba(0,0,0,.6);
+        overflow: hidden;
+        max-height: 0;
+        opacity: 0;
+        transition: max-height .35s ease, opacity .25s ease;
+        display: flex; flex-direction: column;
+      }
+      #spoofer-floating-panel.open {
+        max-height: 72vh;
+        opacity: 1;
+      }
+
+      /* ── Toast ── */
       .spoofer-toast {
         position: fixed; bottom: 60px; right: 16px; z-index: 9999;
         background: #c0392b; color: #fff;
@@ -586,7 +626,7 @@ function wrapper(plugin_info) {
       .spoofer-tab:hover:not(.active) { color: #ccc; background: #222; }
 
       /* ── Incidents tab ── */
-      #spoofer-list { overflow-y: auto; max-height: calc(100vh - 200px); }
+      #spoofer-list { overflow-y: auto; max-height: calc(72vh - 120px); }
       .spoofer-incident {
         padding: 8px; border-bottom: 1px solid #2a2a2a;
         font-size: 12px; color: #ccc; line-height: 1.6;
@@ -604,7 +644,7 @@ function wrapper(plugin_info) {
         flex: 1; min-width: 0; background: #222; color: #ddd;
         border: 1px solid #555; padding: 3px 4px; font-size: 11px;
       }
-      #spoofer-log-list { overflow-y: auto; max-height: calc(100vh - 200px); }
+      #spoofer-log-list { overflow-y: auto; max-height: calc(72vh - 120px); }
       .spoofer-log-entry {
         padding: 7px 8px; border-bottom: 1px solid #222;
         font-size: 12px; color: #ccc; line-height: 1.5;
@@ -629,74 +669,55 @@ function wrapper(plugin_info) {
     window.addHook('portalDetailsUpdated',      onPortalDetailsUpdated);
     window.addHook('mapDataEntityPassedAction', onMapDataEntityPassedAction);
 
-    // Add sidebar tab (IITC-CE API)
-    if (window.IITC && window.IITC.toolbox) {
-      // IITC-CE v0.36+ toolbox API
-      window.IITC.toolbox.addButton({
-        label:    'Spoofer',
-        action:   toggleSidebarPanel,
-        class:    'spoofer-toolbox-btn',
-        tooltip:  'Spoofer Detector & Reporter',
-      });
-    } else {
-      // Legacy: add to sidebar
-      $('#sidebar').append(
-        $('<div id="spoofer-sidebar">')
-          .append($('<h5 class="sidebar_title">Spoofer Detector</h5>'))
-          .append($('<div id="spoofer-panel-content">'))
-      );
-    }
-
-    // Create floating panel
-    createSidebarPanel();
+    // Create FAB button + slide-up panel
+    createFAB();
 
     console.log('[IITC Spoofer Reporter] Plugin geladen. Speed-Schwelle:', self.speedThreshold, 'km/h');
   };
 
-  function createSidebarPanel() {
-    if ($('#spoofer-floating-panel').length) return;
+  function createFAB() {
+    if ($('#spoofer-fab-wrapper').length) return;
 
-    const $panel = $('<div id="spoofer-floating-panel">').css({
-      position:   'fixed',
-      top:        '60px',
-      right:      '8px',
-      width:      '320px',
-      background: '#111',
-      border:     '1px solid #444',
-      borderRadius: '6px',
-      zIndex:     8000,
-      display:    'none',
-      flexDirection: 'column',
-      boxShadow:  '0 4px 16px rgba(0,0,0,.7)',
-    });
+    const $panel = $('<div id="spoofer-floating-panel">').html(
+      '<div id="spoofer-panel-content"></div>'
+    );
 
-    const $header = $('<div>').css({
-      padding: '8px 10px', background: '#222', borderRadius: '6px 6px 0 0',
-      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      cursor: 'move',
-    }).html('<b style="color:#f39c12">⚠ Spoofer Detector</b>');
+    const $badge = $('<span id="spoofer-fab-badge">').text('0').hide();
 
-    const $closeBtn = $('<button>').text('✕').css({
-      background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '14px',
-    }).on('click', function () { $panel.hide(); });
+    const $btn = $('<button id="spoofer-fab-btn">')
+      .html('⚠ Spoofer')
+      .append($badge)
+      .on('click', toggleSidebarPanel);
 
-    $header.append($closeBtn);
-    $panel.append($header).append($('<div id="spoofer-panel-content">'));
+    const $wrapper = $('<div id="spoofer-fab-wrapper">')
+      .append($panel)
+      .append($btn);
 
-    // Draggable (if jQuery UI available)
-    if ($.fn.draggable) $panel.draggable({ handle: $header[0] });
-
-    $('body').append($panel);
+    $('body').append($wrapper);
     updateSidebar();
+    updateBadge();
+  }
+
+  function updateBadge() {
+    const $badge = $('#spoofer-fab-badge');
+    if (!$badge.length) return;
+    if (self.incidents.length > 0) {
+      $badge.text(self.incidents.length).show();
+    } else {
+      $badge.hide();
+    }
   }
 
   function toggleSidebarPanel() {
     const $panel = $('#spoofer-floating-panel');
-    if ($panel.is(':visible')) {
-      $panel.hide();
+    const isOpen = $panel.hasClass('open');
+    if (isOpen) {
+      $panel.removeClass('open');
+      $('#spoofer-fab-btn').removeClass('active');
     } else {
       updateSidebar();
-      $panel.css('display', 'flex').show();
+      $panel.addClass('open');
+      $('#spoofer-fab-btn').addClass('active');
     }
   }
 
