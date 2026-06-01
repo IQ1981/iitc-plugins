@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         IITC Plugin: New Level 1 Players
 // @namespace    https://github.com/iq1981/iitc-plugins
-// @version      1.7.1
-// @description  Tracks true L1 agents & training completions — faction filter, sound alerts, CSV export, auto-cleanup
+// @version      1.7.3
+// @description  Tracks true L1 agents & training completions — faction filter, sound alerts, push notifications, CSV export, auto-cleanup
 // @author       iq1981
 // @match        https://intel.ingress.com/*
 // @grant        none
@@ -10,9 +10,9 @@
 // ==/UserScript==
 
 /* global L */
-'use strict';
 
 function pluginMain () {
+  'use strict';
   if (typeof window.plugin !== 'function') window.plugin = function () {};
   if (window.plugin.newL1Players && window.plugin.newL1Players._loaded) return;
 
@@ -41,6 +41,7 @@ function pluginMain () {
   self.activeTab      = 'l1';
   self.factionFilter  = 'all';
   self.soundEnabled   = true;
+  self.notifyEnabled  = false;
   self.maxAgeHours    = 24;   // 0 = off
   self._cleanupTimer  = null;
 
@@ -97,11 +98,33 @@ function pluginMain () {
         osc.start(ctx.currentTime + i * step);
         osc.stop(ctx.currentTime + (i + 1) * step);
       });
+      // Close context after all oscillators finish to prevent accumulation
+      setTimeout(() => { try { ctx.close(); } catch (e) {} }, (duration + 0.1) * 1000);
     } catch (e) { /* AudioContext unavailable */ }
   }
 
   const soundL1   = () => playTone([660, 880], 0.25);        // new L1 agent
   const soundGrad = () => playTone([440, 660, 880], 0.36);   // training completed
+
+  // ── Push notifications with Ingress Prime deep link ─────────────────────
+  function requestNotifyPermission (cb) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') { cb(); return; }
+    Notification.requestPermission().then(p => { if (p === 'granted') cb(); });
+  }
+
+  function sendNotification (agentName, faction, distKm, portalName, lat, lng) {
+    if (!self.notifyEnabled) return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const fName = (F[faction] || F.N).name;
+    const url   = 'https://intel.ingress.com/intel?pll=' + lat + ',' + lng + '&z=17';
+    const n = new Notification('◈ Neuer L1-Agent: ' + agentName, {
+      body: fName + ' · ' + distKm.toFixed(1) + ' km · ' + portalName,
+      icon: 'https://intel.ingress.com/favicon.ico',
+      tag:  'l1p-' + agentName   // prevents duplicate notifications per agent
+    });
+    n.onclick = () => { window.open(url, '_blank'); n.close(); };
+  }
 
   // ── Marker management ────────────────────────────────────────────────────
   function putMarker (name, lat, lng, color, label, store) {
@@ -215,6 +238,8 @@ function pluginMain () {
           self.players[agent] = { portals: [], firstSeen: now, lat: ll.lat, lng: ll.lng, faction };
           soundL1();
           updateBadges();
+          const distKm = haversineKm(mapCenter().lat, mapCenter().lng, ll.lat, ll.lng);
+          sendNotification(agent, faction, distKm, portalName, ll.lat, ll.lng);
         }
         if (!self.players[agent].portals.some(p => p.guid === data.guid)) {
           self.players[agent].portals.push({ guid: data.guid, name: portalName, lat: ll.lat, lng: ll.lng });
@@ -249,8 +274,7 @@ function pluginMain () {
     return `<span class="${ID}-fdot" style="background:${(F[faction]||F.N).l1}"></span>`;
   }
 
-  function renderL1Table () {
-    const rows = filteredByRadius(self.players);
+  function renderL1Table (rows) {
     if (!rows.length) return `<tr><td colspan="5" class="${ID}-empty">Keine aktiven L1-Agenten erkannt.</td></tr>`;
     return rows.map(({ name, d, dist }) => {
       const col = (F[d.faction]||F.N).l1;
@@ -265,8 +289,7 @@ function pluginMain () {
     }).join('');
   }
 
-  function renderGradTable () {
-    const rows = filteredByRadius(self.graduated);
+  function renderGradTable (rows) {
     if (!rows.length) return `<tr><td colspan="6" class="${ID}-empty">Noch kein Agent hat das Training abgeschlossen.</td></tr>`;
     return rows.map(({ name, d, dist }) => {
       const col = (F[d.faction]||F.N).grad;
@@ -283,8 +306,10 @@ function pluginMain () {
   }
 
   function renderBody () {
-    const l1Count   = filteredByRadius(self.players).length;
-    const gradCount = filteredByRadius(self.graduated).length;
+    const l1Rows    = filteredByRadius(self.players);
+    const gradRows  = filteredByRadius(self.graduated);
+    const l1Count   = l1Rows.length;
+    const gradCount = gradRows.length;
 
     const radiusSel = RADII_KM.map(r =>
       `<option value="${r}"${r === self.radiusKm ? ' selected' : ''}>${r} km</option>`
@@ -300,13 +325,19 @@ function pluginMain () {
       return `<button class="${ID}-fbtn${active}" data-f="${f}">${label}</button>`;
     }).join('');
 
-    const soundIcon = self.soundEnabled ? '🔔' : '🔕';
+    const soundIcon  = self.soundEnabled  ? '🔔' : '🔕';
+    const notifySupported = 'Notification' in window;
+    const notifyIcon = self.notifyEnabled ? '📳 EIN' : '📳 AUS';
+    const notifyTitle = notifySupported
+      ? (self.notifyEnabled ? 'Benachrichtigungen deaktivieren' : 'Benachrichtigungen aktivieren (öffnet Ingress Prime)')
+      : 'Browser unterstützt keine Benachrichtigungen';
 
     return `
       <div class="${ID}-controls">
         <span class="${ID}-label">RADIUS</span>
         <select id="${ID}-radius">${radiusSel}</select>
         <button id="${ID}-sound" title="Ton ${self.soundEnabled ? 'an' : 'aus'}">${soundIcon}</button>
+        <button id="${ID}-notify" title="${notifyTitle}" class="${self.notifyEnabled ? ID + '-notify-on' : ''}"${notifySupported ? '' : ' disabled'}>${notifyIcon}</button>
         <button id="${ID}-export" title="Als CSV exportieren">⬇ CSV</button>
         <button id="${ID}-clear" title="Alle Daten löschen">LEEREN</button>
         <button id="${ID}-refresh">↻</button>
@@ -329,16 +360,16 @@ function pluginMain () {
         <div id="${ID}-panel-l1"   style="display:${self.activeTab === 'l1'   ? 'block' : 'none'}">
           <table class="${ID}-table"><thead><tr>
             <th>Agent</th><th>Distanz</th><th>Erstsichtung</th><th>Portale</th><th></th>
-          </tr></thead><tbody>${renderL1Table()}</tbody></table>
+          </tr></thead><tbody>${renderL1Table(l1Rows)}</tbody></table>
         </div>
         <div id="${ID}-panel-grad" style="display:${self.activeTab === 'grad' ? 'block' : 'none'}">
           <table class="${ID}-table"><thead><tr>
             <th>Agent</th><th>Level</th><th>Distanz</th><th>Erstsichtung</th><th>Training ✓</th><th></th>
-          </tr></thead><tbody>${renderGradTable()}</tbody></table>
+          </tr></thead><tbody>${renderGradTable(gradRows)}</tbody></table>
         </div>
       </div>
       <div class="${ID}-footer">
-        ${l1Count} L1 aktiv · ${gradCount} Training ✓ · ${Object.keys(self.players).length + Object.keys(self.graduated).length} gesamt
+        ${l1Count} L1 aktiv · ${gradCount} Training ✓ (${self.radiusKm} km) · ${Object.keys(self.players).length + Object.keys(self.graduated).length} in DB
       </div>`;
   }
 
@@ -352,8 +383,12 @@ function pluginMain () {
   function updateBadges () {
     const b1 = document.getElementById(`${ID}-b1`);
     const b2 = document.getElementById(`${ID}-b2`);
-    if (b1) b1.textContent = filteredByRadius(self.players).length;
-    if (b2) b2.textContent = filteredByRadius(self.graduated).length;
+    if (b1 || b2) {
+      const l1Count   = filteredByRadius(self.players).length;
+      const gradCount = filteredByRadius(self.graduated).length;
+      if (b1) b1.textContent = l1Count;
+      if (b2) b2.textContent = gradCount;
+    }
   }
 
   // ── Event binding ────────────────────────────────────────────────────────
@@ -373,6 +408,16 @@ function pluginMain () {
     if (snd) snd.addEventListener('click', () => {
       self.soundEnabled = !self.soundEnabled;
       rerender();
+    });
+
+    const ntf = el('notify');
+    if (ntf) ntf.addEventListener('click', () => {
+      if (!self.notifyEnabled) {
+        requestNotifyPermission(() => { self.notifyEnabled = true; rerender(); });
+      } else {
+        self.notifyEnabled = false;
+        rerender();
+      }
     });
 
     const exp = el('export');
@@ -557,6 +602,9 @@ function pluginMain () {
         border-radius:2px; min-height:38px; -webkit-tap-highlight-color:transparent;
       }
       #${ID}-sound   { border:1px solid #ffffff22; color:#aaa; font-size:16px; padding:4px 8px; }
+      #${ID}-notify  { border:1px solid #ffffff22; color:#778; font-size:11px; padding:5px 8px; letter-spacing:.5px; }
+      #${ID}-notify.${ID}-notify-on { border-color:#00ff9955; color:#00ff99; }
+      #${ID}-notify:disabled { opacity:.35; cursor:not-allowed; }
       #${ID}-export  { border:1px solid #00ffff44; color:#00ffff99; font-size:11px; padding:5px 10px; letter-spacing:.5px; }
       #${ID}-clear   { border:1px solid #ff660066; color:#ff6600cc; font-size:11px; padding:5px 10px; letter-spacing:.5px; }
       #${ID}-refresh { border:1px solid #00ffff44; color:#00ffff88; font-size:16px; padding:4px 8px; }
@@ -640,7 +688,7 @@ function pluginMain () {
 
     window.addHook('portalDetailLoaded', onPortalDetailLoaded);
     startCleanupTimer();
-    console.log('[IITC-L1Players] v1.7.1 geladen.');
+    console.log('[IITC-L1Players] v1.7.3 geladen.');
   };
 
   // ── Bootstrap ────────────────────────────────────────────────────────────
@@ -651,22 +699,17 @@ function pluginMain () {
   }
 }
 
-// ── Dual-mode loading ─────────────────────────────────────────────────────────
+// ── Loading ───────────────────────────────────────────────────────────────────
+// With @grant none the userscript runs in the page context directly.
+// The _loaded guard inside pluginMain prevents any double-initialisation.
 (function () {
-  const script = document.createElement('script');
-  script.textContent = '(' + pluginMain.toString() + ')();';
-  (document.body || document.head || document.documentElement).appendChild(script);
+  // Primary: direct call (works with @grant none / shared window)
+  pluginMain();
 
-  setTimeout(function () {
-    if (typeof window.addHook === 'function') {
-      pluginMain();
-    } else {
-      let n = 0;
-      const t = setInterval(function () {
-        n++;
-        if (typeof window.addHook === 'function') { pluginMain(); clearInterval(t); }
-        else if (n >= 30) clearInterval(t);
-      }, 500);
-    }
-  }, 100);
+  // Fallback: script-tag injection for sandboxed userscript managers
+  if (!window.plugin || !window.plugin.newL1Players || !window.plugin.newL1Players._loaded) {
+    const script = document.createElement('script');
+    script.textContent = '(' + pluginMain.toString() + ')();';
+    (document.body || document.head || document.documentElement).appendChild(script);
+  }
 })();
